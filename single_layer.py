@@ -1,4 +1,4 @@
-
+import torch
 
 class SingleLayerDSSM():
     def __init__(self, config):
@@ -29,7 +29,7 @@ class SingleLayerDSSM():
 		self.u = torch.randn(self.network_config.batch_size, self.output_dims, device = self.network_config.device)
 		self.r = self.activation(self.u)
 
-    def run_dynamics(self, prev_layer, feedback, step):
+    def run_dynamics(self, prev_layer, feedback, step = 0):
         dt = self.network_config.euler_lr
         r_save = self.r.clone()
 
@@ -37,6 +37,26 @@ class SingleLayerDSSM():
 
         self.u += lr * du
         self.r = self.activation(self.u)
+
+        err_all = torch.norm(self.r - r_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
+		err = torch.mean(err_all) / dt 
+
+        return err
+    
+    def update_plasiticity(self, prev_layer, epoch = 0):
+        lr = self.network_config.lr
+        gamma = self.network_config.gamma
+
+		if gamma > 0:
+			update_step = lr * gamma ** (1 + self.layer_ind - self.network_config.num_layers)
+		else:
+			update_step = lr
+
+        dW = self.y @ prev_layer.t() - self.W 
+        dL = self.y @ self.y.t() - self.L / (1 + gamma)
+
+        self.W += update_step * dW 
+        self.L += update_step * dL
 
 	def activation(self, u):
 		r = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device)), 
