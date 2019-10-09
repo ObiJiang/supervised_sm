@@ -38,7 +38,7 @@ class SingleLayerDSSM():
     def initialize(self, batch_size):
         # activations
         self.u = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device)
-        self.r = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device) # self.activation(self.u)
+        self.r = self.activation(self.u)
 
     def run_dynamics(self, prev_layer, feedback = None, step = 0):
         dt = self.network_config.euler_lr
@@ -57,15 +57,8 @@ class SingleLayerDSSM():
         self.u += dt * du
         self.r = self.activation(self.u)
 
-        # print(feedback)
-        # if self.layer_ind == self.network_config.nb_layers - 1:
-        #     print(self.u)
-        # print(self.r)
-
         err_all = torch.norm(self.r - r_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
         err = torch.mean(err_all) / dt 
-
-        # print(self.r, err)
 
         return err.item()
     

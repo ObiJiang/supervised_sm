@@ -28,7 +28,7 @@ class SupervisedSNN():
         print("Chosen classes: {}".format(config.subset_classes))
         config.output_dims = config.nb_subset_classes
 
-        config.nb_units = [100, 30]
+        config.nb_units = [30]
         config.nb_units.insert(0, input_dims_linear)
         config.nb_layers = len(config.nb_units)
         config.nb_units.append(config.output_dims)
@@ -38,7 +38,10 @@ class SupervisedSNN():
 
         # host and device
         config.host = torch.device("cpu")
-        config.device = torch.device("cpu") if torch.cuda.is_available() else torch.device("cpu") # <-----------
+        if args.gpu:
+            config.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        else:
+            config.device = config.host 
 
         # learning rate and step size
         config.euler_lr = 0.1
@@ -46,7 +49,7 @@ class SupervisedSNN():
         config.tol = 1e-5
 
         # training params
-        config.nb_epochs = 10
+        config.nb_epochs = args.nb_epochs
         config.batch_size = args.batch_size
 
         # data dir
@@ -58,25 +61,25 @@ class SupervisedSNN():
 
         # mnist train data lodaer
         train_dataset = torchvision.datasets.MNIST(self.config.data_dir, train=True, download=True,
-		                             transform=torchvision.transforms.Compose([
-		                               torchvision.transforms.ToTensor(),
-		                               torchvision.transforms.Normalize(
-		                                 (0.1307,), (0.3081,))
-		                             ]))
+                                     transform=torchvision.transforms.Compose([
+                                       torchvision.transforms.ToTensor(),
+                                       torchvision.transforms.Normalize(
+                                         (0.1307,), (0.3081,))
+                                     ]))
         train_mask = self._get_indices(train_dataset, config.subset_classes)
         self.train_loader = torch.utils.data.DataLoader(train_dataset,
-		  batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(train_mask))
+          batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(train_mask))
 
-		# mnist test data lodaer
+        # mnist test data lodaer
         test_dataset = torchvision.datasets.MNIST(self.config.data_dir, train=False, download=True,
-		                             transform=torchvision.transforms.Compose([
-		                               torchvision.transforms.ToTensor(),
-		                               torchvision.transforms.Normalize(
-		                                 (0.1307,), (0.3081,))
-		                             ]))
+                                     transform=torchvision.transforms.Compose([
+                                       torchvision.transforms.ToTensor(),
+                                       torchvision.transforms.Normalize(
+                                         (0.1307,), (0.3081,))
+                                     ]))
         test_mask = self._get_indices(test_dataset, config.subset_classes)
         self.test_loader = torch.utils.data.DataLoader(test_dataset,
-		  batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(test_mask))
+          batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(test_mask))
 
     """ helper func """
     def _label_embedding(self, labels):
@@ -93,9 +96,9 @@ class SupervisedSNN():
                 indices.append(i)
         return indices
 
-    def preprocessing(self, inp):
-        processed = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device) * 1/np.sqrt(self.config.nb_units[0])), 
-				 torch.zeros_like(u, device = self.network_config.device))
+    def _preprocessing(self, inp):
+        processed = torch.max(torch.min(inp, torch.ones_like(inp, device = self.config.device) * 1/np.sqrt(self.config.nb_units[0])), 
+                 torch.zeros_like(inp, device = self.config.device))
 
         return processed
 
@@ -118,7 +121,7 @@ class SupervisedSNN():
         for layer_id in range(self.config.nb_layers):
             self.layers[layer_id].initialize(batch_size)
 
-    def train(self, inp, out, epoch = 0):
+    def run(self, inp, out, epoch = 0):
         delta = np.ones(self.config.nb_layers) * np.inf
 
         self.layers[self.config.nb_layers - 1].set_z(out)
@@ -135,21 +138,28 @@ class SupervisedSNN():
 
             if delta.mean() < self.config.tol:
                 break
-        # print(" ")
-        # print(dynamic_step, delta.mean())
+
         cur_inp = inp
         for layer_id in range(self.config.nb_layers):
             self.layers[layer_id].update_plasiticity(cur_inp, epoch = epoch)
             cur_inp = self.layers[layer_id].output
-        # print(" ")
-        # print(dynamic_step, delta.sum())
+
         return delta.mean()
 
     def get_pred(self):
         return np.argmax(self.layers[self.config.nb_layers - 1].output.cpu().data.numpy(), axis=1)
+    
+    def get_acc(self, label):
+        label_pred = self.get_pred()
+        label_golden = np.argmax(label.cpu().data.numpy(), axis=1)
 
-    def run(self):
+        acc = accuracy_score(label_golden, label_pred)
+        return acc
+
+    def train(self):
         for epoch in tqdm(range(self.config.nb_epochs)):
+
+            # training loop
             loss = 0
             acc_list = []
             for idx, (image, label) in enumerate(tqdm(self.train_loader)):
@@ -161,46 +171,78 @@ class SupervisedSNN():
                 
                 self.init_layers(batch_size)
 
-                loss_per_batch = self.train(image, label, epoch)
+                loss_per_batch = self.run(image, label, epoch)
                 loss +=  loss_per_batch
 
-                label_pred = self.get_pred()
-                # print(" ")
-                # print(label_pred, self.layers[self.config.nb_layers - 1].output)
-                label_golden = np.argmax(label.cpu().data.numpy(), axis=1)
-
-                acc = accuracy_score(label_golden, label_pred)
+                acc = self.get_acc(label)
                 acc_list.append(acc)
+            
+            # test loop
+            val_list = []
+            for idx, (image, label) in enumerate(tqdm(self.test_loader)):
+                batch_size = image.shape[0]
+                image = image.to(self.config.device)
+                image = image.view([batch_size, -1])
+                label = self._label_embedding(label).to(self.config.device).view([batch_size, -1])
+                
+                self.init_layers(batch_size)
 
-            print("Epoch {:}: loss {:}, accuracy {:}".format(epoch, loss/idx, np.mean(acc_list)))
+                _ = self.run(image, label)
+
+                val = self.get_acc(label)
+
+                val_list.append(val)
+
+            print("Epoch {:}: loss {:}, training accuracy {:}, test accuracy {:}".format(epoch, loss/idx, np.mean(acc_list), np.mean(val_list)))
+
+    def test(self):
+        # test loop
+        val_list = []
+        for idx, (image, label) in enumerate(tqdm(self.test_loader)):
+            batch_size = image.shape[0]
+            image = image.to(self.config.device)
+            image = image.view([batch_size, -1])
+            label = self._label_embedding(label).to(self.config.device).view([batch_size, -1])
+            
+            self.init_layers(batch_size)
+
+            _ = self.run(image, label)
+
+            val = self.get_acc(label)
+
+            val_list.append(val)
+
+        print("Test accuracy {:}".format(np.mean(val_list)))
 
 if __name__ == '__main__':
-	# arguments
-	parser = argparse.ArgumentParser()
+    # arguments
+    parser = argparse.ArgumentParser()
 
-	# training_parameters
-	parser.add_argument('--batch_size', default=1, type=int)
+    # training_parameters
+    parser.add_argument('--batch_size', default=1, type=int)
+    parser.add_argument("--nb_epochs", default=2, type=int)
 
-	# train/test
-	parser.add_argument('--train', default=False, action='store_true')
+    # train/test
+    parser.add_argument('--test', default=False, action='store_true')
 
-	# save/load model
-	parser.add_argument('--model_save_dir', default='./save.pickle')
-	parser.add_argument('--data_dir', default='./data')
+    # save/load model
+    parser.add_argument('--model_save_dir', default='./save.pickle')
+    parser.add_argument('--data_dir', default='./data')
 
-	config = parser.parse_args()
+    # sys params
+    parser.add_argument('--gpu', default=False, action='store_true')
+    config = parser.parse_args()
 
-if config.train:
-	model = SupervisedSNN(config)
-	model.create_network()
-	model.run()
-	# save model
-	torch.save(vars(model), config.model_save_dir)
+if not config.test:
+    model = SupervisedSNN(config)
+    model.create_network()
+    model.train()
+    # save model
+    torch.save(vars(model), config.model_save_dir)
 
 else:
-    pass
-	# load_dict = torch.load(config.model_save_dir)
-	# model = DSSM(config)
-	# model.__dict__.update(load_dict)
-	# model.classify()
+    load_dict = torch.load(config.model_save_dir)
+    model = SupervisedSNN(config)
+    model.__dict__.update(load_dict)
+    model.test()
 
