@@ -1,10 +1,13 @@
-import torch
+import numpy as np
+import torch, torchvision
 from single_layer import SingleLayerDSSM
+from sklearn.metrics import accuracy_score
 
 # misc
 from misc import AttrDict
 import random
 from tqdm import tqdm
+import argparse
 
 # set random seed
 random_seed = 1
@@ -18,13 +21,10 @@ class SupervisedSNN():
         input_dims = [28, 28, 1]
         input_dims_linear = int(np.prod(input_dims))
         # output
-        num_classes = 10
+        config.nb_classes = 10
         config.nb_subset_classes = 2
-        config.subset_classes = random.sample(range(num_classes), config.nb_subset_classes)
-        if config.nb_subset_classes == 2:
-            config.output_dims = 1
-        else:
-            config.output_dims = config.nb_subset_classes
+        config.subset_classes = random.sample(range(config.nb_classes), config.nb_subset_classes)
+        config.output_dims = config.nb_subset_classes
 
         config.nb_units = [100, 30]
         config.nb_units.insert(0, input_dims_linear)
@@ -36,7 +36,7 @@ class SupervisedSNN():
 
         # host and device
         config.host = torch.device("cpu")
-        config.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        config.device = torch.device("cpu") if torch.cuda.is_available() else torch.device("cpu") # <-----------
 
         # learning rate and step size
         config.euler_lr = 0.1
@@ -52,34 +52,41 @@ class SupervisedSNN():
 
         self.layers = {}
 
+        self.config = config
+
         # mnist train data lodaer
-		self.train_loader = torch.utils.data.DataLoader(
-		  torchvision.datasets.MNIST(self.config.data_dir, train=True, download=True,
+        train_dataset = torchvision.datasets.MNIST(self.config.data_dir, train=True, download=True,
 		                             transform=torchvision.transforms.Compose([
 		                               torchvision.transforms.ToTensor(),
 		                               torchvision.transforms.Normalize(
 		                                 (0.1307,), (0.3081,))
-		                             ])),
-		  batch_size=self.config.batch_size, shuffle=True, sampler = Data.sampler.SubsetRandomSampler(config.subset_classes))
+		                             ]))
+        train_mask = self._get_indices(train_dataset, config.subset_classes)
+        self.train_loader = torch.utils.data.DataLoader(train_dataset,
+		  batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(train_mask))
 
 		# mnist test data lodaer
-		self.test_loader = torch.utils.data.DataLoader(
-		  torchvision.datasets.MNIST(self.config.data_dir, train=False, download=True,
+        test_dataset = torchvision.datasets.MNIST(self.config.data_dir, train=False, download=True,
 		                             transform=torchvision.transforms.Compose([
 		                               torchvision.transforms.ToTensor(),
 		                               torchvision.transforms.Normalize(
 		                                 (0.1307,), (0.3081,))
-		                             ])),
-		  batch_size=self.config.batch_size, shuffle=True, sampler = Data.sampler.SubsetRandomSampler(config.subset_classes))
+		                             ]))
+        test_mask = self._get_indices(test_dataset, config.subset_classes)
+        self.test_loader = torch.utils.data.DataLoader(test_dataset,
+		  batch_size=self.config.batch_size, shuffle=False, sampler = torch.utils.data.sampler.SubsetRandomSampler(test_mask))
 
     """ helper func """
     def _label_embedding(self, labels):
-        if self.config.nb_subset_classes == 2:
-            label_emb = (labels == self.config.subset_classes[0]).float()
-        else:
-            label_emb = torch.nn.functional(labels).index_select(2, torch.tensor(self.config.subset_classes))
-
+        label_emb = torch.nn.functional.one_hot(labels, self.config.nb_classes).index_select(1, torch.tensor(self.config.subset_classes)).float()
         return label_emb 
+
+    def _get_indices(self, dataset, class_names):
+        indices =  []
+        for i in range(len(dataset.targets)):
+            if dataset.targets[i] in class_names:
+                indices.append(i)
+        return indices
 
     """ main func """
     def create_network(self):
@@ -87,7 +94,7 @@ class SupervisedSNN():
             layer_config = AttrDict()
 
             # layer-wise configs
-            layer_config.layer_id = layer_id
+            layer_config.layer_ind = layer_id
             layer_config.input_dims = self.config.nb_units[layer_id]
             layer_config.output_dims = self.config.nb_units[layer_id + 1]
 
@@ -117,32 +124,42 @@ class SupervisedSNN():
 
             if delta.mean() < self.config.tol:
                 break
-        
+
         cur_inp = inp
         for layer_id in range(self.config.nb_layers):
             self.layers[layer_id].update_plasiticity(cur_inp, epoch = epoch)
             cur_inp = self.layers[layer_id].output
-        
+        # print(" ")
+        # print(dynamic_step, delta.sum())
         return delta.sum()
 
+    def get_pred(self):
+        return np.argmax(self.layers[self.config.nb_layers - 1].output.cpu().data.numpy(), axis=1)
+
     def run(self):
-        for epoch in tqdm(self.config.nb_epochs):
+        for epoch in tqdm(range(self.config.nb_epochs)):
             loss = 0
-            for idx, (image, label) in enumerate(self.train_loder):
+            acc_list = []
+            for idx, (image, label) in enumerate(tqdm(self.train_loader)):
+
                 batch_size = image.shape[0]
                 image = image.to(self.config.device)
                 image = image.view([batch_size, -1])
-
-                label = self._label_embedding(label).to(self.config.device)
-
+                
+                label = self._label_embedding(label).to(self.config.device).view([batch_size, -1])
+                
                 self.init_layers(batch_size)
-
-                # TO DO: train
 
                 loss_per_batch = self.train(image, label, epoch)
                 loss +=  loss_per_batch
 
-            print("Epoch {:}: loss {:}".format(epoch, loss))
+                label_pred = self.get_pred()
+                label_golden = np.argmax(label.cpu().data.numpy(), axis=1)
+
+                acc = accuracy_score(label_golden, label_pred)
+                acc_list.append(acc)
+
+            print("Epoch {:}: loss {:}, accuracy {:}".format(epoch, loss, np.mean(acc_list)))
 
 
 if __name__ == '__main__':
