@@ -12,6 +12,7 @@ import argparse
 # set random seed
 random_seed = 1
 torch.manual_seed(random_seed)
+random.seed(random_seed)
 
 class SupervisedSNN():
     def __init__(self, args):
@@ -24,15 +25,16 @@ class SupervisedSNN():
         config.nb_classes = 10
         config.nb_subset_classes = 2
         config.subset_classes = random.sample(range(config.nb_classes), config.nb_subset_classes)
+        print("Chosen classes: {}".format(config.subset_classes))
         config.output_dims = config.nb_subset_classes
 
-        config.nb_units = [30]
+        config.nb_units = [100, 30]
         config.nb_units.insert(0, input_dims_linear)
         config.nb_layers = len(config.nb_units)
         config.nb_units.append(config.output_dims)
 
         # feedback parameter
-        config.gamma = 1.00
+        config.gamma = 0.10
 
         # host and device
         config.host = torch.device("cpu")
@@ -79,7 +81,9 @@ class SupervisedSNN():
     """ helper func """
     def _label_embedding(self, labels):
         label_emb = torch.nn.functional.one_hot(labels, self.config.nb_classes).index_select(1, torch.tensor(self.config.subset_classes)).float()
-        label_emb = (label_emb * 2 - 1)/2
+        # label_emb = (label_emb * 2 - 1)/2
+
+        label_emb = label_emb/np.sqrt(self.config.nb_units[-1])
         return label_emb 
 
     def _get_indices(self, dataset, class_names):
@@ -88,6 +92,12 @@ class SupervisedSNN():
             if dataset.targets[i] in class_names:
                 indices.append(i)
         return indices
+
+    def preprocessing(self, inp):
+        processed = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device) * 1/np.sqrt(self.config.nb_units[0])), 
+				 torch.zeros_like(u, device = self.network_config.device))
+
+        return processed
 
     """ main func """
     def create_network(self):

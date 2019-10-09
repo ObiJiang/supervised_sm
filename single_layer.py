@@ -1,5 +1,5 @@
 import torch
-
+import numpy as np
 class SingleLayerDSSM():
     def __init__(self, config):
         self.input_dims = config.input_dims
@@ -27,6 +27,9 @@ class SingleLayerDSSM():
     
     def _is_last_layer(self):
         return self.layer_ind == self.network_config.nb_layers - 1
+    
+    def _is_first_layer(self):
+        return self.layer_ind == 0
 
     """ layer func """
     def set_z(self, z):
@@ -53,7 +56,7 @@ class SingleLayerDSSM():
 
         self.u += dt * du
         self.r = self.activation(self.u)
-        # print(self.u)
+
         # print(feedback)
         # if self.layer_ind == self.network_config.nb_layers - 1:
         #     print(self.u)
@@ -83,14 +86,12 @@ class SingleLayerDSSM():
             dW = prev_layer.t() @ self.z - self.W 
             dL = self.z.t() @ (- self.inv_activation(self.z) + (prev_layer @ self.W) - 
                         self.z @(self.L - torch.eye(self.output_dims, device = self.network_config.device)) ) 
-            # dL = self.z.t() @ ( (prev_layer @ self.W) - 
-            #             self.z @(self.L) ) 
 
         self.W += update_step * dW 
         self.L += update_step * dL
 
     def activation(self, u):
-        r = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device)), 
+        r = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device) * 1/np.sqrt(self.output_dims)), 
 				 torch.zeros_like(u, device = self.network_config.device))
 
         # r = torch.max(u, torch.zeros_like(u, device = self.network_config.device))
