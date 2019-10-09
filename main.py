@@ -26,13 +26,13 @@ class SupervisedSNN():
         config.subset_classes = random.sample(range(config.nb_classes), config.nb_subset_classes)
         config.output_dims = config.nb_subset_classes
 
-        config.nb_units = [100, 30]
+        config.nb_units = [30]
         config.nb_units.insert(0, input_dims_linear)
         config.nb_layers = len(config.nb_units)
         config.nb_units.append(config.output_dims)
 
         # feedback parameter
-        config.gamma = 0.00
+        config.gamma = 1.00
 
         # host and device
         config.host = torch.device("cpu")
@@ -79,6 +79,7 @@ class SupervisedSNN():
     """ helper func """
     def _label_embedding(self, labels):
         label_emb = torch.nn.functional.one_hot(labels, self.config.nb_classes).index_select(1, torch.tensor(self.config.subset_classes)).float()
+        label_emb = (label_emb * 2 - 1)/2
         return label_emb 
 
     def _get_indices(self, dataset, class_names):
@@ -124,14 +125,15 @@ class SupervisedSNN():
 
             if delta.mean() < self.config.tol:
                 break
-
+        # print(" ")
+        # print(dynamic_step, delta.mean())
         cur_inp = inp
         for layer_id in range(self.config.nb_layers):
             self.layers[layer_id].update_plasiticity(cur_inp, epoch = epoch)
             cur_inp = self.layers[layer_id].output
         # print(" ")
         # print(dynamic_step, delta.sum())
-        return delta.sum()
+        return delta.mean()
 
     def get_pred(self):
         return np.argmax(self.layers[self.config.nb_layers - 1].output.cpu().data.numpy(), axis=1)
@@ -145,7 +147,6 @@ class SupervisedSNN():
                 batch_size = image.shape[0]
                 image = image.to(self.config.device)
                 image = image.view([batch_size, -1])
-                
                 label = self._label_embedding(label).to(self.config.device).view([batch_size, -1])
                 
                 self.init_layers(batch_size)
@@ -154,13 +155,14 @@ class SupervisedSNN():
                 loss +=  loss_per_batch
 
                 label_pred = self.get_pred()
+                # print(" ")
+                # print(label_pred, self.layers[self.config.nb_layers - 1].output)
                 label_golden = np.argmax(label.cpu().data.numpy(), axis=1)
 
                 acc = accuracy_score(label_golden, label_pred)
                 acc_list.append(acc)
 
-            print("Epoch {:}: loss {:}, accuracy {:}".format(epoch, loss, np.mean(acc_list)))
-
+            print("Epoch {:}: loss {:}, accuracy {:}".format(epoch, loss/idx, np.mean(acc_list)))
 
 if __name__ == '__main__':
 	# arguments

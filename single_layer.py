@@ -34,20 +34,30 @@ class SingleLayerDSSM():
 
     def initialize(self, batch_size):
         # activations
-        self.u = torch.randn(batch_size, self.output_dims, device = self.network_config.device)
-        self.r = self.activation(self.u)
+        self.u = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device)
+        self.r = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device) # self.activation(self.u)
 
     def run_dynamics(self, prev_layer, feedback = None, step = 0):
         dt = self.network_config.euler_lr
+        gamma = self.network_config.gamma
         r_save = self.r.clone()
 
-        du = - self.u + prev_layer @ self.W  - self.r @ (self.L - torch.eye(self.output_dims, device = self.network_config.device))
-        
+        if self.z is None:
+            du = - self.u + prev_layer @ self.W  - self.r @ ((1 + gamma) * self.L - torch.eye(self.output_dims, device = self.network_config.device))
+        else:
+            assert(self._is_last_layer())
+            du = - self.u + prev_layer @ self.W  - self.z @ (self.L - torch.eye(self.output_dims, device = self.network_config.device))
+            
         if feedback is not None:
             du += feedback
 
         self.u += dt * du
         self.r = self.activation(self.u)
+        # print(self.u)
+        # print(feedback)
+        # if self.layer_ind == self.network_config.nb_layers - 1:
+        #     print(self.u)
+        # print(self.r)
 
         err_all = torch.norm(self.r - r_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
         err = torch.mean(err_all) / dt 
@@ -65,14 +75,16 @@ class SingleLayerDSSM():
         else:
             update_step = lr
 
-        dW = prev_layer.t() @ self.r - self.W 
-
         if self.z is None:
-            dL = self.r.t() @ self.r - self.L / (1 + gamma)
+            dL = (1 + gamma) * (self.r.t() @ self.r - self.L) / 2 
+            dW = prev_layer.t() @ self.r - self.W 
         else:
             assert(self._is_last_layer())
+            dW = prev_layer.t() @ self.z - self.W 
             dL = self.z.t() @ (- self.inv_activation(self.z) + (prev_layer @ self.W) - 
                         self.z @(self.L - torch.eye(self.output_dims, device = self.network_config.device)) ) 
+            # dL = self.z.t() @ ( (prev_layer @ self.W) - 
+            #             self.z @(self.L) ) 
 
         self.W += update_step * dW 
         self.L += update_step * dL
@@ -86,7 +98,6 @@ class SingleLayerDSSM():
         return r
     
     def inv_activation(self, r):
-
         return r
     
     @property
@@ -95,4 +106,9 @@ class SingleLayerDSSM():
 
     @property
     def feedback(self):
-        return self.network_config.gamma * self.r @ self.W.t()
+        if self.z is None:
+            return self.network_config.gamma * self.r @ self.W.t()
+        else:
+            assert(self._is_last_layer())
+            return self.network_config.gamma * self.z @ self.W.t()
+       
