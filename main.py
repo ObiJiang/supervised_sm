@@ -23,7 +23,7 @@ class SupervisedSNN():
         input_dims_linear = int(np.prod(input_dims))
         # output
         config.nb_classes = 10
-        config.nb_subset_classes = 2
+        config.nb_subset_classes = args.nb_test_classes
         config.subset_classes = random.sample(range(config.nb_classes), config.nb_subset_classes)
         print("Chosen classes: {}".format(config.subset_classes))
         config.output_dims = config.nb_subset_classes
@@ -121,10 +121,10 @@ class SupervisedSNN():
         for layer_id in range(self.config.nb_layers):
             self.layers[layer_id].initialize(batch_size)
 
-    def run(self, inp, out, epoch = 0):
+    def run_test(self, inp):
         delta = np.ones(self.config.nb_layers) * np.inf
 
-        self.layers[self.config.nb_layers - 1].set_z(out)
+        self.layers[self.config.nb_layers - 1].clear_z()
 
         for dynamic_step in range(3000):
             cur_inp = inp
@@ -135,6 +135,23 @@ class SupervisedSNN():
                 cur_inp = self.layers[layer_id].output
             
             delta[self.config.nb_layers - 1] = self.layers[self.config.nb_layers - 1].run_dynamics(cur_inp, step = dynamic_step)
+
+            if delta.mean() < self.config.tol:
+                break
+
+        return delta.mean()
+
+    def run_train(self, inp, out, epoch = 0):
+        delta = np.ones(self.config.nb_layers-1) * np.inf
+
+        self.layers[self.config.nb_layers - 1].set_z(out)
+
+        for dynamic_step in range(3000):
+            cur_inp = inp
+            for layer_id in range(self.config.nb_layers - 1):
+
+                delta[layer_id] = self.layers[layer_id].run_dynamics(cur_inp, self.layers[layer_id+1].feedback, step = dynamic_step)
+                cur_inp = self.layers[layer_id].output
 
             if delta.mean() < self.config.tol:
                 break
@@ -171,29 +188,16 @@ class SupervisedSNN():
                 
                 self.init_layers(batch_size)
 
-                loss_per_batch = self.run(image, label, epoch)
+                loss_per_batch = self.run_train(image, label, epoch)
                 loss +=  loss_per_batch
 
                 acc = self.get_acc(label)
                 acc_list.append(acc)
             
             # test loop
-            val_list = []
-            for idx, (image, label) in enumerate(tqdm(self.test_loader)):
-                batch_size = image.shape[0]
-                image = image.to(self.config.device)
-                image = image.view([batch_size, -1])
-                label = self._label_embedding(label).to(self.config.device).view([batch_size, -1])
-                
-                self.init_layers(batch_size)
+            test_acc = self.test()
 
-                _ = self.run(image, label)
-
-                val = self.get_acc(label)
-
-                val_list.append(val)
-
-            print("Epoch {:}: loss {:}, training accuracy {:}, test accuracy {:}".format(epoch, loss/idx, np.mean(acc_list), np.mean(val_list)))
+            print("Epoch {:}: loss {:}, test accuracy {:}".format(epoch, loss/idx, test_acc))
 
     def test(self):
         # test loop
@@ -206,13 +210,13 @@ class SupervisedSNN():
             
             self.init_layers(batch_size)
 
-            _ = self.run(image, label)
+            _ = self.run_test(image)
 
             val = self.get_acc(label)
 
             val_list.append(val)
-
-        print("Test accuracy {:}".format(np.mean(val_list)))
+        
+        return np.mean(val_list)
 
 if __name__ == '__main__':
     # arguments
@@ -221,6 +225,7 @@ if __name__ == '__main__':
     # training_parameters
     parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument("--nb_epochs", default=2, type=int)
+    parser.add_argument("--nb_test_classes", default=2, type=int)
 
     # train/test
     parser.add_argument('--test', default=False, action='store_true')
@@ -244,5 +249,6 @@ else:
     load_dict = torch.load(config.model_save_dir)
     model = SupervisedSNN(config)
     model.__dict__.update(load_dict)
-    model.test()
+    test_acc = model.test()
+    print("Test accuracy: {:}".format(test_acc))
 

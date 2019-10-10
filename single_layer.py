@@ -34,22 +34,26 @@ class SingleLayerDSSM():
     """ layer func """
     def set_z(self, z):
         self.z = z
+    def clear_z(self):
+        self.z = None
 
     def initialize(self, batch_size):
         # activations
         self.u = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device)
-        self.r = self.activation(self.u)
+        self.r = 0.1 * torch.randn(batch_size, self.output_dims, device = self.network_config.device) # self.activation(self.u)
 
     def run_dynamics(self, prev_layer, feedback = None, step = 0):
         dt = self.network_config.euler_lr
         gamma = self.network_config.gamma
         r_save = self.r.clone()
+        u_save = self.u.clone()
 
-        if self.z is None:
-            du = - self.u + prev_layer @ self.W  - self.r @ ((1 + gamma) * self.L - torch.eye(self.output_dims, device = self.network_config.device))
+        assert(self.z is None)
+
+        if self._is_last_layer():
+            du = - self.u + prev_layer @ self.W  - self.r @ (self.L - torch.eye(self.output_dims, device = self.network_config.device))
         else:
-            assert(self._is_last_layer())
-            du = - self.u + prev_layer @ self.W  - self.z @ (self.L - torch.eye(self.output_dims, device = self.network_config.device))
+            du = - self.u + prev_layer @ self.W  - self.r @ ((1 + gamma) * self.L - torch.eye(self.output_dims, device = self.network_config.device))
             
         if feedback is not None:
             du += feedback
@@ -58,6 +62,7 @@ class SingleLayerDSSM():
         self.r = self.activation(self.u)
 
         err_all = torch.norm(self.r - r_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
+        # err_all = torch.norm(self.u - u_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
         err = torch.mean(err_all) / dt 
 
         return err.item()
@@ -84,10 +89,10 @@ class SingleLayerDSSM():
         self.L += update_step * dL
 
     def activation(self, u):
-        r = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device) * 1/np.sqrt(self.output_dims)), 
-				 torch.zeros_like(u, device = self.network_config.device))
+        # r = torch.max(torch.min(u, torch.ones_like(u, device = self.network_config.device) * 1/np.sqrt(self.output_dims)), 
+		# 		 torch.zeros_like(u, device = self.network_config.device))
 
-        # r = torch.max(u, torch.zeros_like(u, device = self.network_config.device))
+        r = torch.max(u, torch.zeros_like(u, device = self.network_config.device))
 		# r = self.act_fn(u)
         return r
     
