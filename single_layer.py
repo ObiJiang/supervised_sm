@@ -62,7 +62,6 @@ class SingleLayerDSSM():
         self.r = self.activation(self.u)
 
         err_all = torch.norm(self.r - r_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
-        # err_all = torch.norm(self.u - u_save, p=2, dim=1)/(1e-10 + torch.norm(r_save, p=2, dim=1))
         err = torch.mean(err_all) / dt 
 
         return err.item()

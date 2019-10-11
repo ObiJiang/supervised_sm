@@ -28,7 +28,7 @@ class SupervisedSNN():
         print("Chosen classes: {}".format(config.subset_classes))
         config.output_dims = config.nb_subset_classes
 
-        config.nb_units = [30]
+        config.nb_units = [2048]
         config.nb_units.insert(0, input_dims_linear)
         config.nb_layers = len(config.nb_units)
         config.nb_units.append(config.output_dims)
